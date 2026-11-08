@@ -4,7 +4,7 @@ window.FIGHT = {
   W, H, FPS,
   async ready() {
     const probes = [
-      [`100px ${FONT.brush}`, '雷焔完決着全力一閃荒野午前零時・vs'], [`100px ${FONT.heavy}`, '決戦雷焔VS全力'],
+      [`100px ${FONT.brush}`, '紅蓮紫電第七区炎上完決着全力一閃・vs燃える街限界突破'], [`100px ${FONT.heavy}`, '決戦紅蓮紫電VS全力限界突破居酒屋ホテルカラオケ薬局麻雀ゲーム'],
       [`100px ${FONT.title}`, 'RAI HOMURA VS FINAL 0123'], [`100px ${FONT.sub}`, 'THUNDER FLAME EPISODE'],
     ];
     for (const [f, s] of probes) await document.fonts.load(f, s);

@@ -21,7 +21,7 @@ const opt = (name, def) => { const i = args.indexOf('--' + name); return i >= 0 
 const flag = (name) => args.includes('--' + name);
 
 const ROOT = __dirname;
-const OUT = path.resolve(opt('out', path.join(ROOT, '..', 'stickman-duel.mp4')));
+const OUT = path.resolve(opt('out', path.join(ROOT, '..', 'stickman-duel-2.mp4')));
 const WORK = path.join(ROOT, 'out');
 const FRAMES = path.join(WORK, 'frames');
 const WORKERS = +opt('workers', 4);
@@ -86,7 +86,7 @@ function ffmpeg(argv) {
 
 (async () => {
   const from = +opt('from', 0);
-  const duration = 57.6;
+  const duration = await (async () => { const b = await chromium.launch(); const p = await b.newPage(); await p.goto(PAGE); const d = await p.evaluate(() => FIGHT.duration()); await b.close(); return d; })();
   const to = Math.min(+opt('to', duration), duration);
   fs.mkdirSync(WORK, { recursive: true });
   const patch = opt('patch', null);

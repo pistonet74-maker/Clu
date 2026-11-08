@@ -153,7 +153,7 @@ const FS = {
   reset(t) {
     this.t = t;
     this.post = {
-      glow: 1, bloom: 0.35, flash: 0, flashColor: '#ffffff', impact: 0, invert: false,
+      glow: 1, bloom: 0.22, flash: 0, flashColor: '#ffffff', impact: 0, invert: false,
       chroma: 0, vignette: 0.55, grain: 0.035, letterbox: 0, fade: 0, fadeColor: '#000',
       tint: null, tintAlpha: 0, saturate: 1, contrast: 1, radialBlur: 0, rbx: W / 2, rby: H / 2,
     };
@@ -212,7 +212,7 @@ function postProcess(t) {
     OX.drawImage(SCENE, 0, 0);
   }
 
-  if (P.impact > 0) { P.glow = Math.min(P.glow, 0.25); P.bloom = 0; }
+  if (P.impact > 0) { P.glow = Math.min(P.glow, 0.25); P.bloom = 0; P.vignette = 0; }
   // emissive glow: two blur radii on the quarter-res buffer, added on top
   if (P.glow > 0) {
     GB1X.setTransform(1, 0, 0, 1, 0, 0); GB1X.clearRect(0, 0, GB1.width, GB1.height);

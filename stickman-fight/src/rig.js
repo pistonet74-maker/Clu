@@ -59,7 +59,33 @@ const POSES = {
   flyKick:    P(-18, 14, -40, 30, 40, 96, 92, -2, 8, -120, [0, 0]),
   flyPunch:   P(30, 4, 92, 0, -60, 40, 24, -60, -30, -40, [0, 0]),
   hover:      P(4, 2, 30, 30, -14, 34, 12, -26, -10, -40, [0, 0]),
+  // ---- v2 additions
+  limbo:      P(-62, -34, 158, 22, -150, 34, 62, -112, -32, -40),
+  spinBack:   P(42, -12, 34, 104, -42, 62, -104, -2, 8, -14, [0, 1]),
+  liftUp:     P(-10, -14, 168, 22, 162, 28, 36, -48, -36, -22),
+  hurl:       P(36, 6, 108, 8, 98, 16, 52, -58, -56, -4),
+  chopUp:     P(-14, -10, 168, 14, -30, 70, 30, -26, -30, -16),
+  chopDown:   P(34, 14, 48, 2, -40, 70, 52, -62, -48, -6),
+  tackle:     P(52, -20, 62, 112, 52, 122, 70, -96, -54, -40, [0, 0]),
+  swordHigh:  P(-6, -6, 162, 32, 156, 38, 34, -34, -34, -16),
+  swordSlash: P(34, 10, 58, 0, 50, 10, 64, -84, -58, -6),
+  swordGuard: P(10, 6, 98, 66, 88, 74, 38, -40, -36, -16),
+  swordThrust:P(30, 6, 92, 2, 84, 10, 56, -66, -56, -4),
+  fallSky:    P(4, -6, 132, 24, -128, 24, 30, -42, -30, -34, [0, 0]),
+  superLand:  P(46, -14, 18, 2, -62, 30, 80, -116, -22, -94, [1, 0]),
+  roar:       P(-18, -46, -48, 74, -58, 80, 38, -38, -36, -22),
+  laugh:      P(-20, -36, 18, 60, -12, 64, 10, -6, -8, -6),
+  beckon:     P(8, 4, 76, 118, 18, 120, 30, -30, -28, -14),
+  grab:       P(30, 6, 96, 18, 90, 24, 46, -50, -50, -6),
+  kneelFist:  P(30, 30, 30, 4, 12, 12, 82, -86, -6, -84, [1, 0]),
+  lieBack:    P(0, -10, 150, 20, 120, 30, 6, -10, -6, -14, [0, 0]),
 };
+function runPose(ph, k = 1) {
+  const s = Math.sin(ph), c = Math.cos(ph);
+  const leg = (q) => [12 + 58 * Math.sin(q), -18 - 88 * (0.5 + 0.5 * Math.cos(q))];
+  const [l1, k1] = leg(ph), [l2, k2] = leg(ph + Math.PI);
+  return { lean: 24 * k, head: -14, a1: 14 - 58 * s, e1: 78 + 18 * c, a2: 14 + 58 * s, e2: 78 - 18 * c, l1, k1, l2, k2, pf: [0, 0] };
+}
 
 /* ---------- forward kinematics ---------- */
 function vecA(ang, len, dir) { const a = ang * DEG; return [dir * Math.sin(a) * len, Math.cos(a) * len]; }
@@ -108,7 +134,7 @@ function ikLeg(hip, target, L1, L2, dir) {
 }
 function plantFeet(J, st) {
   const pf = st.pose.pf || [1, 1];
-  const s = J.s, gy = GROUND - RIG.lw * s * 0.5;
+  const s = J.s, gy = (st.floor ?? GROUND) - RIG.lw * s * 0.5;
   [['k1', 'f1', pf[0]], ['k2', 'f2', pf[1]]].forEach(([kk, fk, on]) => {
     if (!on) return;
     const f = J[fk];
@@ -124,7 +150,7 @@ function resolvePose(p) {
   if (typeof p === 'string') { if (!POSES[p]) throw new Error('pose ' + p); return { ...POSES[p] }; }
   return { ...p };
 }
-const NONLERP = new Set(['t', 'e', 'jump', 'pose', 'pm', 'P', 'Y', 'y', 'g', 'dir', 'pf', 'tag', 'mode', 'spl']);
+const NONLERP = new Set(['t', 'e', 'jump', 'pose', 'pm', 'P', 'Y', 'y', 'g', 'dir', 'pf', 'tag', 'mode', 'spl', 'freeze', 'slide', 'still']);
 
 class Track {
   constructor(init = {}) { this.init = init; this.keys = []; this.res = null; }
@@ -133,7 +159,8 @@ class Track {
   build() {
     const keys = this.keys.map((k, i) => ({ ...k, _i: i })).sort((a, b) => a.t - b.t || a._i - b._i);
     let prev = { x: 0, y: 0, dir: 1, rot: 0, s: 1, g: true, alpha: 1, aura: 0, eyes: 0, sil: 0, ghost: 0,
-      blade: 0, lift: 0, streak: 0, glow: 1, P: resolvePose('stand'), ...this.init };
+      blade: 0, lift: 0, streak: 0, glow: 1, floor: 0, freeze: 0, slide: 0, still: 0, bob: 0, tremble: 0, stiff: 1, mouth: 0, charge: 0, run: 0, runF: 3.2,
+      P: resolvePose('stand'), ...this.init };
     if (this.init.pose) prev.P = resolvePose(this.init.pose);
     this.res = keys.map((k) => {
       const r = { ...prev, ...k };
@@ -182,7 +209,8 @@ class Track {
       st.y = st.g ? GROUND - lowestOffset(pose, st.rot, st.s) + (st.lift || 0) : a.Y + (b.Y - a.Y) * w;
     }
     if (b.jump) st.y -= 4 * b.jump * u * (1 - u);
-    st.mode = a.mode;
+    st.mode = a.mode; st.freeze = a.freeze; st.slide = a.slide; st.still = a.still;
+    if (u >= 1) { st.freeze = b.freeze; st.slide = b.slide; st.still = b.still; }
     return st;
   }
   vel(t, dt = 1 / 60) {

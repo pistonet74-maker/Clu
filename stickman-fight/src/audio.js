@@ -381,11 +381,77 @@ function powerRoar(K, t0, dur, v = 0.35, pan = 0, electric = true) {
   if (electric) crackle(K, t0, dur, v * 0.8, pan, 70); else crackle(K, t0, dur, v * 0.6, pan, 40, 1500);
 }
 
-/* ---------- the score ---------- */
-const CH = { Dm: [62, 65, 69], Bb: [58, 62, 65], C: [60, 64, 67], A: [57, 61, 64], Gm: [55, 58, 62], F: [57, 60, 65], D: [62, 66, 69] };
-const ROOT = { Dm: 38, Bb: 34, C: 36, A: 33, Gm: 31, F: 29, D: 38 };
-const BARS = { 6: 'Dm', 7: 'Dm', 8: 'Bb', 9: 'C', 10: 'A', 11: 'Dm', 12: 'Bb', 13: 'C', 14: 'Dm', 15: 'Gm', 16: 'A',
-  17: 'Dm', 18: 'Bb', 19: 'Gm', 20: 'A', 21: 'Dm', 22: 'Bb', 23: 'C', 24: 'A', 29: 'Bb', 30: 'F', 31: 'C', 32: 'Dm', 33: 'Bb', 34: 'C', 35: 'D' };
+/* ---------- extra instruments & effects for v2 ---------- */
+function guitar(K, t, root, dur, v = 0.12, mute = true) {
+  // distorted power chord: root + fifth + octave through an amp-ish chain
+  const g = envS(K, t, 0.004, v, t + dur - (mute ? 0.02 : 0.05), mute ? 0.05 : 0.25);
+  const pre = K.ctx.createGain(); pre.gain.value = 3.2;
+  const lp = filt(K, 'lowpass', mute ? 1700 : 3200, 0.8), pk = filt(K, 'peaking', 800, 1.2); pk.gain.value = 4;
+  const hp = filt(K, 'highpass', 90);
+  for (const [m, c] of [[root, -7], [root, 7], [root + 7, 0], [root + 12, 4]]) { const o = osc(K, 'sawtooth', mtof(m), t, dur + 0.3); o.detune.value = c; o.connect(pre); }
+  chain(pre, shaper(K, 7), hp, pk, lp, g);
+  route(K, g, K.music, -0.25, 0.1);
+  const d = K.ctx.createDelay(0.05); d.delayTime.value = 0.017; g.connect(d); const w = K.ctx.createGain(); w.gain.value = 0.8; d.connect(w); route(K, w, K.music, 0.35, 0.05);
+}
+function brass(K, t, ms, v = 0.16, dur = 0.7) {
+  const lp = filt(K, 'lowpass', 900, 2);
+  lp.frequency.setValueAtTime(700, t); lp.frequency.linearRampToValueAtTime(4200, t + 0.06); lp.frequency.exponentialRampToValueAtTime(900, t + dur);
+  const g = env(K, t, 0.012, v, dur, 0.0001);
+  const mix = K.ctx.createGain(); mix.gain.value = 1 / Math.sqrt(ms.length * 2);
+  for (const m of ms) for (const c of [-9, 9]) { const o = osc(K, 'sawtooth', mtof(m), t, dur + 0.2); o.detune.value = c; o.connect(mix); }
+  chain(mix, lp, g); route(K, g, K.music, 0, 0.35);
+}
+function metalCrunch(K, t, v = 0.7, pan = 0) {
+  route(K, chain(nsrc(K, t, 0.6), filt(K, 'lowpass', 1800), env(K, t, 0.002, v, 0.35)), K.sfx, pan, 0.3);
+  const r = RNG(Math.floor(t * 100) + 9);
+  for (let i = 0; i < 6; i++) metal(K, t + r.f() * 0.12, v * 0.25, pan + r.s() * 0.3, r.r(180, 700), r.r(0.3, 0.8));
+  thud(K, t, v * 0.8, pan);
+}
+function glassShower(K, t, dur = 1.6, v = 0.35, pan = 0) {
+  const r = RNG(Math.floor(t * 100) + 3), n = Math.floor(dur * 45);
+  for (let i = 0; i < n; i++) {
+    const tt = t + Math.pow(r.f(), 1.6) * dur, f = r.r(2400, 8000), d = r.r(0.03, 0.18);
+    route(K, chain(osc(K, 'sine', f, tt, d + 0.05), env(K, tt, 0.001, v * r.r(0.05, 0.3) * (1 - (tt - t) / dur * 0.7), d)), K.sfx, pan + r.s() * 0.7, 0.35);
+  }
+  route(K, chain(nsrc(K, t, 0.4), filt(K, 'highpass', 3500), env(K, t, 0.002, v * 0.7, 0.25)), K.sfx, pan, 0.3);
+}
+function growl(K, t, dur = 0.8, v = 0.4, pan = 0) {
+  const o = osc(K, 'sawtooth', 62, t, dur + 0.2), lfo = osc(K, 'sine', 23, t, dur + 0.2), lg = K.ctx.createGain(); lg.gain.value = 30;
+  lfo.connect(lg); lg.connect(o.frequency);
+  const bp = filt(K, 'bandpass', 420, 1.4);
+  route(K, chain(o, shaper(K, 4), bp, envS(K, t, 0.05, v, t + dur - 0.1, 0.25)), K.sfx, pan, 0.3);
+  route(K, chain(nsrc(K, t, dur), filt(K, 'bandpass', 900, 0.8), envS(K, t, 0.05, v * 0.5, t + dur - 0.1, 0.2)), K.sfx, pan, 0.25);
+  fire(K, t, dur, v * 0.6, pan);
+}
+function rainBed(K, t0, t1, v = 0.22) {
+  const n = nsrc(K, t0, t1 - t0 + 0.5);
+  route(K, chain(n, filt(K, 'highpass', 900), filt(K, 'lowpass', 9000), envS(K, t0, 1.2, v, t1 - 0.8, 0.8)), K.sfx, 0, 0.2);
+  const r = RNG(31);
+  for (let tt = t0 + 0.5; tt < t1; tt += r.r(0.02, 0.07)) route(K, chain(nsrc(K, tt, 0.02), filt(K, 'bandpass', r.r(2000, 6000), 2), env(K, tt, 0.001, v * r.r(0.1, 0.4), 0.012)), K.sfx, r.s() * 0.8, 0.1);
+}
+function siren(K, t0, t1, v = 0.03, pan = 0) {
+  const o = osc(K, 'triangle', 650, t0, t1 - t0 + 0.2), lfo = osc(K, 'sine', 0.45, t0, t1 - t0 + 0.2), lg = K.ctx.createGain(); lg.gain.value = 180;
+  lfo.connect(lg); lg.connect(o.frequency);
+  route(K, chain(o, filt(K, 'lowpass', 1500), envS(K, t0, 1, v, t1 - 1, 1)), K.sfx, pan, 0.6);
+}
+function fireBed(K, t0, t1, v = 0.08) {
+  route(K, chain(nsrc(K, t0, t1 - t0 + 0.5, true), filt(K, 'lowpass', 500), envS(K, t0, 1, v, t1 - 0.6, 0.6)), K.sfx, 0, 0.2);
+  crackle(K, t0, t1 - t0, v * 1.6, 0, 9, 1600);
+}
+function grind(K, t, dur, v = 0.5) {
+  route(K, chain(nsrc(K, t, dur + 0.5, true), filt(K, 'lowpass', 220), envS(K, t, 0.3, v, t + dur - 0.2, 0.4)), K.sfx, -0.3, 0.4);
+  const r = RNG(77);
+  for (let k = 0; k < dur * 4; k++) metal(K, t + r.f() * dur, v * 0.18, -0.4 + r.s() * 0.3, r.r(90, 260), r.r(0.6, 1.4));
+  crackle(K, t, dur, v * 0.5, -0.3, 25, 900);
+}
+
+/* ---------- the score (v2) ---------- */
+const CH = { Dm: [62, 65, 69], Bb: [58, 62, 65], C: [60, 64, 67], A: [57, 61, 64], Gm: [55, 58, 62], F: [57, 60, 65], D: [62, 66, 69],
+  Em: [64, 67, 71], Cc: [60, 64, 67], Dd: [62, 66, 69], B: [59, 63, 66] };
+const ROOT = { Dm: 38, Bb: 34, C: 36, A: 33, Gm: 31, F: 29, D: 38, Em: 40, Cc: 36, Dd: 38, B: 35 };
+const BARS = { 6: 'Dm', 7: 'Dm', 8: 'Bb', 9: 'C', 10: 'A', 11: 'Dm', 12: 'Bb', 13: 'C', 14: 'A', 15: 'Gm', 16: 'A',
+  17: 'Dm', 18: 'Bb', 19: 'Gm', 20: 'A', 21: 'Em', 22: 'Cc', 23: 'Dd', 24: 'B', 26: 'Dm', 27: 'A',
+  31: 'Bb', 32: 'F', 33: 'C', 34: 'Dm', 35: 'Bb', 36: 'C', 37: 'D', 38: 'D' };
 const MELODY = {
   7: [[74, 0, 6], [76, 6, 2], [77, 8, 4], [81, 12, 4]],
   8: [[79, 0, 12], [77, 12, 4]],
@@ -394,12 +460,12 @@ const MELODY = {
   11: [[86, 0, 8], [84, 8, 2], [81, 10, 2], [77, 12, 4]],
   12: [[77, 0, 6], [79, 6, 2], [82, 8, 8]],
   13: [[81, 0, 6], [79, 6, 2], [76, 8, 8]],
-  14: [[86, 0, 4], [84, 4, 4], [81, 8, 4], [77, 12, 4]],
+  14: [[85, 0, 8], [88, 8, 8]],
   15: [[79, 0, 6], [81, 6, 2], [82, 8, 4], [86, 12, 4]],
-  16: [[85, 0, 8], [88, 8, 8]],
+  16: [[85, 0, 8], [88, 8, 6], [89, 14, 2]],
 };
-[21, 22, 23, 24].forEach((b, i) => { MELODY[b] = MELODY[7 + i]; });
-const OUTRO_MEL = { 29: [[74, 0, 8], [77, 8, 8]], 30: [[72, 0, 8], [69, 8, 8]], 31: [[76, 0, 8], [79, 8, 8]], 32: [[77, 0, 16]], 33: [[74, 0, 8], [70, 8, 8]], 34: [[72, 0, 8], [76, 8, 8]], 35: [[78, 0, 16]] };
+[21, 22, 23, 24].forEach((b, i) => { MELODY[b] = MELODY[7 + i].map(([m, s, l]) => [m + 2, s, l]); });
+const OUTRO_MEL = { 31: [[74, 0, 8], [77, 8, 8]], 32: [[72, 0, 8], [69, 8, 8]], 33: [[76, 0, 8], [79, 8, 8]], 34: [[77, 0, 16]], 35: [[74, 0, 8], [70, 8, 8]], 36: [[72, 0, 8], [76, 8, 8]], 37: [[78, 0, 16]] };
 const S16 = BEAT / 4;
 const barT = (b) => b * BAR;
 
@@ -407,152 +473,152 @@ function composeMusic(K) {
   const ostinato = (ch) => { const c = CH[ch]; return [c[0], c[2], c[0] + 12, c[2], c[1] + 12, c[2], c[0] + 12, c[2]]; };
   // ---------- intro (0 – 6.4) ----------
   drone(K, 0.2, 6.5, [26, 33, 38], 0.09, 420);
-  [[0.4, 74], [0.8, 69], [1.0, 70], [1.4, 69], [2.0, 74], [2.2, 75], [2.6, 74], [2.8, 70], [3.0, 69]].forEach(([t, m]) => koto(K, t, m, 0.42, 0.15, 2.4));
+  choir(K, 0.6, [50, 57, 62], 2.6, 0.035);
+  [[0.4, 74], [0.8, 69], [1.0, 70], [1.4, 69], [2.0, 74], [2.2, 75], [2.6, 74], [2.8, 70]].forEach(([t, m]) => koto(K, t, m, 0.4, 0.15, 2.4));
   [[1.6, 0.75], [2.4, 0.85], [2.8, 0.7], [2.9, 0.55]].forEach(([t, v]) => taiko(K, t, v, 72, -0.1));
-  // pulse under the close-ups
-  for (let t = 3.2; t < 6.4 - 0.01; t += BEAT / 2) bassNote(K, t, 26 + (Math.round((t - 3.2) / (BEAT / 2)) % 4 === 3 ? 12 : 0), BEAT / 2 - 0.02, 0.18 + 0.12 * sat(3.2, 6.4, t));
-  for (let t = 3.2; t < 6.4 - 0.01; t += BEAT) taiko(K, t, 0.35 + 0.25 * sat(3.2, 6.4, t), 82);
-  [[3.6, 74], [4.0, 77], [4.4, 76], [5.2, 74], [5.6, 72], [6.0, 69]].forEach(([t, m]) => koto(K, t, m, 0.26, -0.2, 1.8));
-  // ---------- build (6.4 – 9.6) ----------
+  for (let t = 3.2; t < 6.39; t += BEAT / 2) bassNote(K, t, 26 + (Math.round((t - 3.2) / (BEAT / 2)) % 4 === 3 ? 12 : 0), BEAT / 2 - 0.02, 0.18 + 0.12 * sat(3.2, 6.4, t));
+  for (let t = 3.2; t < 6.39; t += BEAT) taiko(K, t, 0.35 + 0.25 * sat(3.2, 6.4, t), 82);
+  for (let t = 4.8; t < 6.39; t += BEAT / 2) guitar(K, t, 38, BEAT / 2 - 0.03, 0.05 + 0.04 * sat(4.8, 6.4, t));
+  // ---------- VS + the sprint (6.4 – 9.6) ----------
   saws(K, 6.4, [50, 57, 62, 65], 3.1, 0.1, { attack: 2.5, release: 0.05, sweep: [300, 5000], rev: 0.3 });
-  choir(K, 6.42, [62, 65, 69], 3.0, 0.05);
-  for (let t = 6.4; t < 9.5; t += BEAT / 2) bassNote(K, t, 26 + (Math.round((t - 6.4) / (BEAT / 2)) % 2 ? 12 : 0), BEAT / 2 - 0.02, 0.3);
+  choir(K, 6.42, [62, 65, 69], 3.0, 0.05); brass(K, 6.42, [50, 57, 62], 0.14, 0.9);
+  for (let t = 6.4; t < 9.5; t += BEAT / 2) { bassNote(K, t, 26 + (Math.round((t - 6.4) / (BEAT / 2)) % 2 ? 12 : 0), BEAT / 2 - 0.02, 0.3); guitar(K, t, 38, BEAT / 2 - 0.03, 0.09); }
   for (let t = 7.2; t < 9.5; t += BEAT / 2) taiko(K, t, 0.5 + 0.3 * sat(7.2, 9.5, t), 86, (Math.round(t / (BEAT / 2)) % 2) * 0.3 - 0.15);
   for (let t = 8.0; t < 9.5; t += t < 8.8 ? S16 : S16 / 2) snare(K, t, 0.25 + 0.6 * sat(8.0, 9.5, t), 0.1);
-  riser(K, 6.5, 9.55, 0.28);
-  revCymbal(K, 9.6, 1.5, 0.3);
-  // ---------- the drop + fight (9.6 – 27.2) ----------
+  riser(K, 6.5, 9.55, 0.28); revCymbal(K, 9.6, 1.5, 0.3);
+  // ---------- the fight (9.6 – 27.2) ----------
   const groove = (b, o = {}) => {
     const t0 = barT(b);
     const ks = o.half ? [0, 8] : [0, 3, 6, 8, 11, 14];
-    ks.forEach((s) => kick(K, t0 + s * S16, s === 0 ? 1 : 0.85));
-    (o.half ? [8] : [4, 12]).forEach((s) => snare(K, t0 + s * S16, 0.95));
-    if (!o.half) [15].forEach((s) => snare(K, t0 + s * S16, 0.25));
-    for (let s = 0; s < 16; s += o.half ? 2 : 1) hat(K, t0 + s * S16, s % 2 ? 0.07 : 0.14, s === 14 && !o.half);
+    ks.forEach((sx) => kick(K, t0 + sx * S16, sx === 0 ? 1 : 0.85));
+    (o.half ? [8] : [4, 12]).forEach((sx) => snare(K, t0 + sx * S16, 0.95));
+    if (!o.half) snare(K, t0 + 15 * S16, 0.25);
+    for (let sx = 0; sx < 16; sx += o.half ? 2 : 1) hat(K, t0 + sx * S16, sx % 2 ? 0.07 : 0.14, sx === 14 && !o.half);
     taiko(K, t0, 0.55, 70, 0);
     if (o.crash) crash(K, t0, 0.32, 2.0);
   };
   const harmony = (b, o = {}) => {
     const ch = BARS[b], t0 = barT(b), r = ROOT[ch];
     const bp = [[0, 0], [2, 0], [3, 12], [5, 0], [6, 0], [8, 0], [10, 0], [11, 12], [13, 0], [14, 12]];
-    if (!o.noBass) bp.forEach(([s, oc]) => bassNote(K, t0 + s * S16, r + oc, S16 * 1.6, 0.3));
-    saws(K, t0, CH[ch].map((m) => m - 12).concat([CH[ch][0]]), BAR - 0.05, o.pad ?? 0.09, { attack: 0.01, release: 0.2, cutoff: 3000 });
-    if (o.ost !== false) ostinato(ch).forEach((m, i) => { koto(K, t0 + i * 2 * S16, m, 0.28, -0.35, 0.8); koto(K, t0 + (i * 2 + 1) * S16, m + (i % 2 ? 0 : 12), 0.16, 0.35, 0.6); });
-    if (MELODY[b] && !o.noLead) MELODY[b].forEach(([m, s, l]) => lead(K, t0 + s * S16, m, l * S16, o.leadV ?? 0.12));
-    if (o.choir) choir(K, t0, CH[ch].map((m) => m), BAR, o.choir);
+    if (!o.noBass) bp.forEach(([sx, oc]) => bassNote(K, t0 + sx * S16, r + oc, S16 * 1.6, 0.3));
+    saws(K, t0, CH[ch].map((m) => m - 12).concat([CH[ch][0]]), BAR - 0.05, o.pad ?? 0.08, { attack: 0.01, release: 0.2, cutoff: 3000 });
+    if (o.gtr !== false) [0, 2, 3, 5, 6, 8, 10, 11, 13, 14].forEach((sx) => guitar(K, t0 + sx * S16, r + 12, S16 * 1.4, o.gtrV ?? 0.085));
+    if (o.ost !== false) ostinato(ch).forEach((m, i) => { koto(K, t0 + i * 2 * S16, m, 0.26, -0.35, 0.8); koto(K, t0 + (i * 2 + 1) * S16, m + (i % 2 ? 0 : 12), 0.15, 0.35, 0.6); });
+    if (MELODY[b] && !o.noLead) MELODY[b].forEach(([m, sx, l]) => lead(K, t0 + sx * S16, m, l * S16, o.leadV ?? 0.12));
+    if (o.choir) choir(K, t0, CH[ch], BAR, o.choir);
   };
-  // bar 6: the drop (half-time while the title is on screen)
-  boom(K, 9.6, 1.0, 2.6); crash(K, 9.6, 0.5, 3.0); choir(K, 9.6, [50, 57, 62, 65, 69], 1.5, 0.09);
-  groove(6, { half: true });
-  harmony(6, { noLead: true, ost: false, pad: 0.09 });
+  boom(K, 9.6, 1.0, 2.6); crash(K, 9.6, 0.5, 3.0); choir(K, 9.6, [50, 57, 62, 65, 69], 1.5, 0.09); brass(K, 9.6, [50, 57, 62, 65], 0.2, 1.2);
+  groove(6, { half: true }); harmony(6, { noLead: true, ost: false, pad: 0.1, gtr: false });
+  guitar(K, 9.6, 38, 1.4, 0.12, false);
   [10.8, 10.9, 11.0, 11.05, 11.1, 11.15].forEach((t, i) => taiko(K, t, 0.5 + i * 0.08, 95 - i * 3, i % 2 ? 0.3 : -0.3));
-  for (let b = 7; b <= 16; b++) { groove(b, { crash: b === 7 || b === 12 }); harmony(b, { choir: b >= 12 ? 0.035 : 0 }); }
-  // ---------- breakdown / power-up (27.2 – 33.6) ----------
+  for (let b = 7; b <= 16; b++) { groove(b, { crash: b === 7 || b === 11 || b === 14 }); harmony(b, { choir: b >= 11 ? 0.04 : 0 }); }
+  // stops for the big hits
+  for (const t of [12.92, 17.06, 23.6]) brass(K, t, [50, 57, 62, 65], 0.18, 0.8);
+  // ---------- power-up (27.2 – 33.6) ----------
   pad(K, 27.2, [38, 45, 50, 53], 3.2, 0.07);
-  choir(K, 28.8, [62, 65, 69], 1.6, 0.05);
-  choir(K, 30.4, [58, 62, 65], 1.6, 0.06);
-  choir(K, 31.2, [55, 58, 62, 67], 0.8, 0.07);
+  choir(K, 28.8, [62, 65, 69], 1.6, 0.05); choir(K, 30.4, [58, 62, 65], 1.6, 0.06); choir(K, 31.2, [55, 58, 62, 67], 0.8, 0.07);
   saws(K, 32.0, [45, 52, 57, 61, 64], 1.55, 0.1, { attack: 1.2, release: 0.05, sweep: [400, 6000], rev: 0.3 });
-  for (let t = 32.0; t < 33.55; t += BEAT / 2) taiko(K, t, 0.5 + 0.4 * sat(32.0, 33.5, t), 88);
+  for (let t = 32.0; t < 33.55; t += BEAT / 2) { taiko(K, t, 0.5 + 0.4 * sat(32.0, 33.5, t), 88); guitar(K, t, 33 + 12, BEAT / 2 - 0.03, 0.08 + 0.05 * sat(32, 33.6, t)); }
   for (let t = 32.8; t < 33.55; t += S16 / 2) snare(K, t, 0.2 + 0.6 * sat(32.8, 33.55, t));
   for (let t = 32.0; t < 33.5; t += BEAT / 2) bassNote(K, t, 33 + (Math.round((t - 32) / (BEAT / 2)) % 2 ? 12 : 0), BEAT / 2 - 0.02, 0.3);
   riser(K, 32.0, 33.58, 0.3); revCymbal(K, 33.6, 1.2, 0.3);
-  // ---------- beam clash (33.6 – 39.6) ----------
-  boom(K, 33.6, 0.8, 2.0); crash(K, 33.6, 0.45, 2.5);
+  // ---------- beam clash, one step higher (33.6 – 39.6) ----------
+  boom(K, 33.6, 0.8, 2.0); crash(K, 33.6, 0.45, 2.5); brass(K, 33.6, [52, 59, 64, 67], 0.2, 1.2);
   for (let b = 21; b <= 24; b++) {
     groove(b, { crash: b === 21 || b === 23 });
-    for (let s = 1; s < 16; s += 2) hat(K, barT(b) + s * S16 + S16 / 2, 0.05);
-    harmony(b, { choir: 0.07, leadV: 0.13, pad: 0.1 });
+    for (let sx = 1; sx < 16; sx += 2) hat(K, barT(b) + sx * S16 + S16 / 2, 0.05);
+    harmony(b, { choir: 0.07, leadV: 0.13, pad: 0.1, gtrV: 0.1 });
   }
-  // the music swells into the explosion, then cuts
+  brass(K, 37.6, [52, 59, 64, 71], 0.22, 1.0);
   K.musicVol.setValueAtTime(1, 39.2); K.musicVol.linearRampToValueAtTime(1.15, 39.55); K.musicVol.setValueAtTime(0.0001, 39.6);
-  // ---------- the standoff (40.0 – 46.4): tension drones, then silence ----------
+  // ---------- smoke + sword clashes (40.0 – 44.8) ----------
   K.musicVol.setValueAtTime(0.0001, 40.3); K.musicVol.linearRampToValueAtTime(1, 41.0);
-  drone(K, 40.4, 43.2, [26, 38, 39], 0.06, 300);
-  choir(K, 41.6, [62, 63], 1.6, 0.03);
-  K.musicVol.setValueAtTime(1, 43.18); K.musicVol.linearRampToValueAtTime(0.0001, 43.3);
-  // ---------- outro (46.4 – 57.6) ----------
-  K.musicVol.setValueAtTime(0.0001, 46.3); K.musicVol.linearRampToValueAtTime(1.2, 46.5);
-  for (let b = 29; b <= 35; b++) {
-    const ch = BARS[b], t0 = barT(b), c = CH[ch];
-    const last = b === 35;
-    pad(K, t0, [ROOT[ch] + 12, ROOT[ch] + 19].concat(c.map((m) => m - 12)), last ? 2.2 : BAR + 0.15, last ? 0.055 : 0.045);
-    choir(K, t0, c, last ? 2.4 : BAR, 0.04);
-    bassNote(K, t0, ROOT[ch], last ? 1.6 : BAR + 0.12, 0.11, 0.08, 0.5);
+  drone(K, 40.4, 44.8, [26, 38, 39], 0.06, 300);
+  choir(K, 41.2, [62, 63], 0.8, 0.035);
+  for (let t = 41.6; t < 44.75; t += S16 * 2) bassNote(K, t, (t < 43.2 ? 26 : 21) + (Math.round(t / (S16 * 2)) % 2 ? 12 : 0), S16 * 1.8, 0.22);
+  [42.0, 42.4, 42.8, 43.2, 43.6, 44.0].forEach((t, i) => { taiko(K, t, 0.9, 70 + i * 2); kick(K, t, 0.9); brass(K, t, i < 3 ? [50, 57, 62] : [45, 52, 61], 0.16, 0.5); });
+  for (let t = 42.0; t < 44.4; t += S16) hat(K, t, 0.06);
+  K.musicVol.setValueAtTime(1, 44.7); K.musicVol.linearRampToValueAtTime(0.0001, 44.85);
+  // ---------- the tower falls (46.85 – 49.6) ----------
+  K.musicVol.setValueAtTime(0.0001, 46.8); K.musicVol.linearRampToValueAtTime(1, 47.0);
+  choir(K, 47.0, [50, 57, 62, 65, 69], 2.6, 0.08); pad(K, 47.0, [26, 38, 45, 50], 2.6, 0.08);
+  K.musicVol.setValueAtTime(1, 49.2); K.musicVol.linearRampToValueAtTime(0.0001, 49.5);
+  // ---------- rain + outro (49.6 – 64.0) ----------
+  K.musicVol.setValueAtTime(0.0001, 49.55); K.musicVol.linearRampToValueAtTime(1.2, 49.8);
+  for (let b = 31; b <= 38; b++) {
+    const ch = BARS[b], t0 = barT(b), c = CH[ch], last = b === 38;
+    pad(K, t0, [ROOT[ch] + 12, ROOT[ch] + 19].concat(c.map((m) => m - 12)), last ? 2.6 : BAR + 0.15, last ? 0.055 : 0.045);
+    choir(K, t0, c, last ? 2.8 : BAR, 0.04);
+    bassNote(K, t0, ROOT[ch], last ? 1.8 : BAR + 0.12, 0.11, 0.08, 0.5);
     const arp = [c[0] - 12, c[1] - 12, c[2] - 12, c[0], c[1], c[2], c[0], c[2]];
     arp.forEach((m, i) => koto(K, t0 + i * BEAT / 2, m, 0.2, (i % 2 ? 0.3 : -0.3), 2.2));
-    (OUTRO_MEL[b] || []).forEach(([m, s, l]) => koto(K, t0 + s * S16, m + 12, 0.3, 0, Math.min(2.6, l * S16 + 1)));
+    (OUTRO_MEL[b] || []).forEach(([m, sx, l]) => koto(K, t0 + sx * S16, m + 12, 0.3, 0, Math.min(2.6, l * S16 + 1)));
     taiko(K, t0, 0.35, 66);
   }
-  taiko(K, 55.25, 0.8, 60); metal(K, 55.25, 0.25, 0, 880, 2.5);
-  K.musicVol.setValueAtTime(1.2, 56.6); K.musicVol.linearRampToValueAtTime(0.0001, 57.55);
+  taiko(K, 61.65, 0.8, 60); metal(K, 61.65, 0.25, 0, 880, 2.5);
+  K.musicVol.setValueAtTime(1.2, 63.0); K.musicVol.linearRampToValueAtTime(0.0001, 63.95);
 }
 
 /* ---------- sound effects from the story events ---------- */
 function composeSFX(K) {
-  const pan = (e) => clamp((e.x ?? 0) / 900, -0.7, 0.7);
-  windBed(K, 0, 6.6, 0.18);
-  windBed(K, 40.2, 43.4, 0.16); windBed(K, 43.25, 46.6, 0.08);
-  windBed(K, 46.3, 57.6, 0.1);
-  // tinnitus after the big explosion
+  const pan = (e) => { const c = e.t < 17.6 ? 0 : 7700; return clamp(((e.x ?? c) - c) / 900, -0.7, 0.7); };
+  windBed(K, 0, 6.6, 0.16);
+  fireBed(K, 0.2, 49.6, 0.07);
+  siren(K, 0.3, 6.8, 0.028, -0.4); siren(K, 1.6, 7.5, 0.02, 0.5);
+  windBed(K, 40.0, 49.7, 0.14);
+  rainBed(K, 49.6, 64.0, 0.2);
   route(K, chain(osc(K, 'sine', 3700, 40.0, 3.4), envS(K, 40.0, 0.4, 0.012, 43.0, 0.3)), K.sfx, 0, 0.1);
-  // dashes and streaks
-  whoosh(K, 8.42, 0.5, 300, 2600, 0.45, -0.6, 0); whoosh(K, 8.44, 0.5, 280, 2400, 0.45, 0.6, 0);
-  whoosh(K, 9.15, 0.45, 600, 4200, 0.4, 0, 0);
-  whoosh(K, 11.25, 0.32, 500, 3000, 0.3, 0.4, -0.2);
-  whoosh(K, 14.82, 0.4, 900, 300, 0.4, -0.2, -0.7);
-  whoosh(K, 16.0, 0.35, 400, 1600, 0.35, -0.5, -0.3);
-  whoosh(K, 16.95, 0.35, 2000, 500, 0.35, -0.4, -0.2);
-  whoosh(K, 18.8, 0.45, 300, 3000, 0.4, 0.2, 0.3);
-  for (let i = 0; i < 8; i++) { const t = 19.25 + i * 0.1; whoosh(K, t, 0.22, 600, 3500, 0.22, i % 2 ? 0.6 : -0.6, i % 2 ? -0.6 : 0.6); }
-  [20.0, 20.4, 20.8, 21.2, 21.6, 22.0].forEach((t, i) => whoosh(K, t - 0.3, 0.3, 500, 3800, 0.3, i % 2 ? 0.7 : -0.7, 0));
-  whoosh(K, 24.86, 0.36, 300, 3500, 0.45, -0.8, 0); whoosh(K, 24.87, 0.36, 300, 3300, 0.45, 0.8, 0);
-  // meteor whistle
-  { const o = osc(K, 'sine', 1900, 25.62, 0.9); o.frequency.exponentialRampToValueAtTime(240, 26.45);
-    route(K, chain(o, envS(K, 25.62, 0.3, 0.08, 26.42, 0.04)), K.sfx, 0, 0.2);
-    fire(K, 25.62, 0.85, 0.35, 0); whoosh(K, 25.9, 0.55, 3000, 400, 0.4, 0, 0); }
-  whoosh(K, 43.16, 0.16, 400, 7000, 0.55, -0.8, 0.8);
-
+  for (const [t, d, f0, f1, v, p0, p1] of [[8.2, 0.5, 300, 2600, 0.45, -0.6, 0], [8.22, 0.5, 280, 2400, 0.45, 0.6, 0], [9.15, 0.45, 600, 4200, 0.4, 0, 0]]) whoosh(K, t, d, f0, f1, v, p0, p1);
+  for (let i = 0; i < 6; i++) { const t = 18.4 + i * 0.4; whoosh(K, t - 0.3, 0.3, 500, 3800, 0.3, i % 2 ? 0.7 : -0.7, 0); }
+  { const o = osc(K, 'sine', 1900, 26.35, 0.9); o.frequency.exponentialRampToValueAtTime(240, 27.18);
+    route(K, chain(o, envS(K, 26.35, 0.3, 0.08, 27.15, 0.04)), K.sfx, 0, 0.2); fire(K, 26.35, 0.85, 0.35, 0); whoosh(K, 26.6, 0.55, 3000, 400, 0.4, 0, 0); }
+  for (let t = 24.1; t < 26.3; t += 0.55) whoosh(K, t, 0.5, 200, 900, 0.25, 0.2, -0.2);
   for (const e of EV) {
     const t = e.t, p = pan(e);
     switch (e.type) {
+      case 'farBlast': explosion(K, t, 0.25, 0.8, 0.4); break;
       case 'cut': boom(K, t, 0.45, 1.2); break;
-      case 'eyeGlint': glint(K, t, 0.2, e.who === 'rai' ? -0.3 : 0.3); break;
-      case 'nameSlam': taiko(K, t, 1.0, 64); boom(K, t, 0.6, 1.6); crash(K, t, 0.3, 1.8);
-        if (e.who === 'rai') zap(K, t, 0.5, 0.3, -0.3); else fire(K, t, 0.9, 0.4, 0.3); break;
+      case 'eyeGlint': glint(K, t, 0.2, e.who === 'shiden' ? -0.3 : 0.3); break;
+      case 'roar': growl(K, t, 0.7, 0.4, p); break;
+      case 'nameSlam': taiko(K, t, 1.0, 64); boom(K, t, 0.6, 1.6); crash(K, t, 0.3, 1.8); if (e.who === 'shiden') zap(K, t, 0.5, 0.3, -0.3); else fire(K, t, 0.9, 0.4, 0.3); break;
+      case 'strike': thunder(K, t, 1.0, 0); punch(K, t, 0.8, 0, 0.8); break;
       case 'vs': boom(K, t, 0.9, 2.0); crash(K, t, 0.45, 2.2); metal(K, t, 0.35, 0, 300, 1.4); break;
       case 'crouch': whoosh(K, t, 0.2, 200, 700, 0.15); break;
       case 'launch': thud(K, t, 0.8, -0.5); thud(K, t + 0.01, 0.8, 0.5); crash(K, t, 0.12, 0.6); break;
+      case 'carFlip': metalCrunch(K, t, 0.6, p); glassShower(K, t + 0.05, 0.8, 0.25, p); break;
       case 'clash': punch(K, t, 1.0, 0, 1.4); metal(K, t, 0.5, 0, 420, 1.4); thunder(K, t + 0.02, 0.5, -0.3); fire(K, t, 1.0, 0.4, 0.3); break;
-      case 'hit': punch(K, t, 0.85, p, 0.4); break;
-      case 'hitBig': punch(K, t, 1.0, p, 1.0); break;
-      case 'land': case 'kneelThud': case 'collapse': thud(K, t, 0.5, p); break;
-      case 'whoosh': whoosh(K, t, 0.4, 300, 2200, 0.4, 0.4, -0.3); fire(K, t, 0.5, 0.25, 0); break;
-      case 'block': punch(K, t, 0.7, p, 0.2); metal(K, t, 0.35, p, 640, 0.8); break;
-      case 'block2': punch(K, t, 0.8, p, 0.5); metal(K, t, 0.45, p, 700, 1.2); break;
+      case 'glassRain': glassShower(K, t, 2.4, 0.45, 0); break;
+      case 'whoosh': whoosh(K, t, 0.4, 300, 2200, 0.4, 0.4, -0.3); break;
+      case 'swish': whoosh(K, t - 0.06, 0.18, 800, 3000, 0.3, 0.2, -0.2); break;
+      case 'flip': whoosh(K, t, 0.35, 400, 1500, 0.3, -0.2, -0.4); break;
+      case 'dash': case 'charge': whoosh(K, t, 0.3, 300, 2600, 0.35, p - 0.3, p + 0.3); break;
+      case 'land': case 'kneelThud': thud(K, t, 0.5, p); break;
+      case 'kickHit': punch(K, t, 1.0, p, 0.9); break;
+      case 'carSmash': metalCrunch(K, t, 0.9, p); glassShower(K, t + 0.03, 1.2, 0.35, p); break;
+      case 'lift': growl(K, t, 0.35, 0.25, p); metal(K, t, 0.2, p, 160, 0.8); break;
+      case 'hurl': whoosh(K, t, 0.45, 200, 1400, 0.45, 0.4, -0.5); fire(K, t, 0.5, 0.3, 0); break;
+      case 'slice': slashShing(K, t, 0.9); metalCrunch(K, t + 0.02, 0.5, p); break;
+      case 'carBoom': explosion(K, t, 0.8, 1.0, p); glassShower(K, t + 0.04, 1.0, 0.25, p); break;
+      case 'tackleHit': punch(K, t, 0.8, p, 0.5); break;
       case 'rushHit': punch(K, t, 0.42 + (e.k % 3) * 0.05, e.k % 2 ? 0.3 : -0.3, 0); break;
-      case 'crash': explosion(K, t, 0.6, 0.6, p); break;
-      case 'teleport': whoosh(K, t - 0.08, 0.12, 300, 5000, 0.3, p, p); fire(K, t, 0.35, 0.3, p); break;
-      case 'catch': punch(K, t, 0.8, p, 0.5); break;
-      case 'slam': punch(K, t, 1.0, p, 0.9); explosion(K, t, 0.5, 0.5, p); break;
-      case 'jump': whoosh(K, t, 0.3, 200, 1200, 0.3, p, p); break;
-      case 'dive': zap(K, t, 0.2, 0.3, p); break;
-      case 'thunderSlam': thunder(K, t, 1.0, p); punch(K, t, 0.9, p, 1.0); break;
-      case 'fireball': fire(K, t, 0.4, 0.4, 0.4); whoosh(K, t, 0.25, 500, 2000, 0.25, 0.4, -0.3); break;
-      case 'deflect': punch(K, t, 0.5, p, 0); break;
-      case 'explode': explosion(K, t, 0.35, 0.4, -0.5); break;
-      case 'zap': zap(K, t, 0.25, 0.4, -0.2); whoosh(K, t, 0.15, 600, 6000, 0.35, -0.6, 0.6); break;
+      case 'uppercutBig': punch(K, t, 1.0, p, 1.2); zap(K, t, 0.4, 0.4, p); break;
       case 'leap': thud(K, t, 0.7, 0); whoosh(K, t, 0.4, 250, 2600, 0.4); break;
-      case 'skyHit': punch(K, t, 0.8, 0, e.big ? 0.8 : 0.3); metal(K, t, 0.2, 0, 560); break;
+      case 'skyHit': punch(K, t, 0.8, 0, e.big ? 0.8 : 0.3); metal(K, t, 0.2, 0, 560); glassShower(K, t + 0.05, 0.6, 0.15, 0.4); break;
+      case 'block': punch(K, t, 0.6, p, 0.2); metal(K, t, 0.3, p, 640, 0.8); break;
+      case 'hit': punch(K, t, 0.85, p, 0.4); break;
       case 'clash2': punch(K, t, 1.0, 0, 1.0); metal(K, t, 0.4, 0, 480, 1.2); break;
-      case 'megaClash': punch(K, t, 1.0, 0, 1.6); explosion(K, t, 0.6, 1.0, 0); thunder(K, t + 0.03, 0.4, -0.4); break;
+      case 'powerUp': powerRoar(K, t, e.dur || 1.5, 0.32, e.who === 'shiden' ? -0.2 : 0.2, e.who !== 'guren'); break;
+      case 'megaClash': punch(K, t, 1.0, 0, 1.6); explosion(K, t, 0.6, 1.0, 0); thunder(K, t + 0.03, 0.4, -0.4); glassShower(K, t + 0.08, 2.2, 0.4, 0); break;
+      case 'teleport': whoosh(K, t - 0.08, 0.12, 300, 5000, 0.3, p, p); fire(K, t, 0.35, 0.3, p); break;
       case 'axeHit': punch(K, t, 1.0, 0, 0.9); break;
+      case 'wallSmash': metalCrunch(K, t, 0.6, -0.3); glassShower(K, t, 1.4, 0.4, -0.3); break;
       case 'fall': fire(K, t, 0.8, 0.3, 0); break;
-      case 'meteor': explosion(K, t, 1.0, 1.4, 0); crash(K, t, 0.4, 2.5); break;
+      case 'meteor': explosion(K, t, 1.0, 1.4, 0); crash(K, t, 0.4, 2.5); glassShower(K, t + 0.06, 2.0, 0.35, 0); break;
+      case 'carCrush': metalCrunch(K, t, 0.8, p); break;
+      case 'laugh': for (let k = 0; k < 4; k++) growl(K, t + k * 0.11, 0.08, 0.18, p); break;
       case 'heartbeat': heartbeat(K, t, 0.75); break;
       case 'thunderStrike': thunder(K, t, 1.0, 0); break;
-      case 'powerUp': powerRoar(K, t, e.dur || 1.5, 0.32, e.who === 'rai' ? -0.2 : 0.2, e.who === 'rai'); break;
-      case 'flameBurst': fire(K, t, 1.6, 0.6, 0.3); boom(K, t, 0.7, 1.6); break;
+      case 'flameBurst': fire(K, t, 1.6, 0.6, 0.3); boom(K, t, 0.7, 1.6); growl(K, t, 1.0, 0.3, 0.3); break;
       case 'split': crash(K, t, 0.35, 1.6); boom(K, t, 0.5, 1.2); break;
       case 'chargeBall': chargeTone(K, t, t + e.dur, 0.16); break;
       case 'beamFire': whoosh(K, t - 0.05, 0.25, 300, 4000, 0.5, -0.6, 0); whoosh(K, t - 0.05, 0.25, 280, 3800, 0.5, 0.6, 0); break;
@@ -562,15 +628,22 @@ function composeSFX(K) {
       case 'surgeFlash': glint(K, t, 0.25, -0.2); boom(K, t, 0.5, 1.0); break;
       case 'surge': thunder(K, t, 0.8, -0.3); boom(K, t, 0.8, 1.6); crash(K, t, 0.4, 2.0); break;
       case 'unstable': riser(K, t, t + 0.4, 0.3); break;
-      case 'megaExplosion': explosion(K, t, 1.0, 2.2, 0); crash(K, t, 0.5, 3.5); thunder(K, t + 0.05, 0.6, 0); break;
-      case 'bladeRai': zap(K, t, 0.5, 0.35, -0.4); glint(K, t + 0.2, 0.18, -0.4); break;
-      case 'bladeHomura': fire(K, t, 0.8, 0.45, 0.4); glint(K, t + 0.2, 0.16, 0.4); break;
-      case 'windGust': whoosh(K, t, 1.2, 200, 900, 0.3, 0.6, -0.6); break;
+      case 'megaExplosion': explosion(K, t, 1.0, 2.2, 0); crash(K, t, 0.5, 3.5); thunder(K, t + 0.05, 0.6, 0); glassShower(K, t + 0.1, 2.5, 0.4, 0); break;
+      case 'bladeShiden': zap(K, t, 0.5, 0.35, -0.4); glint(K, t + 0.2, 0.18, -0.4); break;
+      case 'bladeGuren': fire(K, t, 0.8, 0.45, 0.4); glint(K, t + 0.2, 0.16, 0.4); break;
+      case 'swordClash': metal(K, t, 0.6, (e.k % 2 ? 0.2 : -0.2), 700 + e.k * 40, 1.2); punch(K, t, 0.6, 0, 0.4); if (e.k % 2) fire(K, t, 0.4, 0.25, 0.3); else zap(K, t, 0.25, 0.25, -0.3); break;
+      case 'lampCut': metal(K, t, 0.4, -0.3, 900, 1.0); metalCrunch(K, t + 0.9, 0.4, -0.3); break;
+      case 'carCut': slashShing(K, t, 0.5); metalCrunch(K, t + 0.6, 0.5, 0.3); break;
       case 'dashFinal': whoosh(K, t, 0.12, 300, 6000, 0.5, -0.8, 0.8); break;
       case 'slash': slashShing(K, t, 1.0); break;
       case 'ribbonCut': whoosh(K, t, 0.5, 900, 400, 0.12, -0.2, -0.6); break;
       case 'shatter': shatter(K, t, 0.6, -0.4); break;
       case 'finalBlast': explosion(K, t, 1.0, 1.3, -0.4); thunder(K, t + 0.02, 0.6, -0.3); fire(K, t, 1.2, 0.5, -0.4); crash(K, t, 0.4, 2.5); break;
+      case 'towerCut': slashShing(K, t, 0.9); boom(K, t + 0.05, 0.7, 2.0); break;
+      case 'towerSlide': grind(K, t, e.dur, 0.55); break;
+      case 'towerCrash': explosion(K, t, 1.0, 2.4, -0.4); boom(K, t, 1.0, 3.0); glassShower(K, t + 0.1, 2.6, 0.4, -0.3); crash(K, t, 0.4, 3.0); break;
+      case 'rainStart': thunder(K, t, 0.8, -0.5); break;
+      case 'fistRaise': glint(K, t, 0.14, 0); break;
       default: break;
     }
   }

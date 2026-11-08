@@ -1,11 +1,11 @@
 /* =====================================================================
  * story.js — helpers shared by every shot + the global event list.
- * The shots themselves live in shots_*.js. Times are in seconds;
+ * The shots themselves live in shots2_*.js. Times are in seconds;
  * the score runs at 150 BPM (one beat = 0.4 s) and big hits land on beats.
  * ===================================================================== */
 'use strict';
 
-const DURATION = 57.6;
+const DURATION = 64.0;
 const EV = [];                      // audio + post-fx events {t, type, ...}
 function ev(t, type, o = {}) { const e = { t, type, ...o }; EV.push(e); return e; }
 
@@ -84,111 +84,119 @@ function renderStory(t) {
   for (const s of SHOTS) if (t >= s.t0 && t < s.t1) { s.fn(t, t - s.t0, s); break; }
 }
 
-/* ---------- drawing an actor: afterimages, auras, the body, eye trail ---------- */
-function drawArmOnly(J, a, e, ch, alpha, s = 1) {
-  const el = v2.add(J.sho, vecA(a - J.r, RIG.ua * s, J.d));
-  const h = v2.add(el, vecA(a + e - J.r, RIG.fa * s, J.d));
-  S.save(); S.globalCompositeOperation = 'lighter'; S.lineCap = 'round'; S.lineJoin = 'round';
-  S.strokeStyle = rgba(ch.glow, alpha); S.lineWidth = RIG.lw * s * 1.1;
-  S.beginPath(); S.moveTo(J.sho[0], J.sho[1]); S.lineTo(el[0], el[1]); S.lineTo(h[0], h[1]); S.stroke();
+/* ---------- wind: hot drift + radial gusts from explosions (drives all cloth) ---------- */
+const GUSTS = [];
+function gust(t, x, y, power = 3000, reach = 1600) { GUSTS.push({ t, x, y, power, reach }); }
+WIND = (t, x, y) => {
+  let wx = -230 + 140 * noise1(t * 0.35, 5), wy = -40 + 40 * noise1(t * 0.5, 6);
+  for (const g of GUSTS) {
+    const age = t - g.t;
+    if (age < 0 || age > 1.6) continue;
+    const dx = x - g.x, dy = y - g.y, d = Math.hypot(dx, dy) + 1;
+    const k = g.power * Math.exp(-age * 2.6) * Math.exp(-d / g.reach);
+    wx += (dx / d) * k; wy += (dy / d) * k;
+  }
+  return [wx, wy];
+};
+
+/* ---------- actor helpers ---------- */
+const ACTORS = [];
+function makeActor(ch, track, o = {}) { const a = new Actor(ch, track, o); ACTORS.push(a); return a; }
+function act(a, t, o = {}) { return drawActor(a, t, o); }
+const J_ = (a, t, k) => a.at(t).J[k];
+
+/* ---------- glass: bouncing shards that glint in the firelight ---------- */
+function glass(t, t0, x, y, o = {}) {
+  const age = t - t0;
+  if (age < 0 || age > (o.life || 2.4)) return;
+  const n = o.n || 40;
+  S.save();
+  for (let i = 0; i < n; i++) {
+    const r = RNG((o.seed || 1) * 1009 + i * 37);
+    const p = simPart({ x: x + r.s() * (o.w || 60), y: y + r.s() * (o.h || 40), vx: r.s() * (o.vx || 700) + (o.bias || 0), vy: -r.r(o.vyMin ?? 100, o.vy ?? 900), drag: 0.6, e: 0.35, mu: 0.5, r: 1, w: r.s() * 30 }, age);
+    const sz = r.r(3, o.size || 9), fade = 1 - sat((o.life || 2.4) * 0.7, o.life || 2.4, age);
+    const glint = 0.5 + 0.5 * Math.sin(p.rot * 3 + i);
+    S.save(); S.translate(p.x, p.y); S.rotate(p.rot);
+    S.globalAlpha = fade;
+    S.fillStyle = `rgba(${200 + 55 * glint | 0},${180 + 60 * glint | 0},${170 + 70 * glint | 0},0.85)`;
+    S.beginPath(); S.moveTo(-sz, -sz * 0.4); S.lineTo(sz * 0.8, -sz * 0.7); S.lineTo(sz * 0.3, sz * 0.6); S.closePath(); S.fill();
+    S.restore();
+    if (glint > 0.85) blob(GL, [255, 220, 180], p.x, p.y, sz * 3, fade * 0.8);
+  }
   S.restore();
-  blob(GL, ch.glow, h[0], h[1], 30 * s, alpha);
-  return h;
 }
-function ghostFighter(st, ch, t, alpha) {
-  const J = solve(st), s = st.s || 1;
-  const segs = bodySegments(J);
+/* ---------- debris with real bounces ---------- */
+function rubble(t, t0, x, y, o = {}) {
+  const age = t - t0;
+  if (age < 0 || age > (o.life || 3)) return;
+  const fade = 1 - sat((o.life || 3) * 0.75, o.life || 3, age);
+  S.save();
+  for (let i = 0; i < (o.n || 20); i++) {
+    const r = RNG((o.seed || 3) * 733 + i * 13);
+    const p = simPart({ x: x + r.s() * (o.jitter ?? 20), y, vx: r.s() * (o.vx ?? 900) + (o.bias || 0), vy: -r.r(o.vyMin ?? 300, o.vy ?? 1400), drag: 0.15, e: 0.35, mu: 0.35, r: 6, w: r.s() * 14 }, age);
+    const sz = r.r(o.smin ?? 5, o.smax ?? 18);
+    rockShape(S, p.x, p.y, sz, p.rot, i + (o.seed || 3));
+    S.globalAlpha = fade; S.fillStyle = o.color || '#2a1d20'; S.fill();
+    if (o.hot) { S.globalCompositeOperation = 'lighter'; S.fillStyle = rgba(o.hot, 0.7 * Math.max(0, 1 - age * 1.2)); S.fill(); S.globalCompositeOperation = 'source-over'; }
+    else { S.strokeStyle = 'rgba(160,100,80,0.35)'; S.lineWidth = 1.5; S.stroke(); }
+  }
+  S.restore();
+}
+/* bouncing sparks (they skitter on the asphalt) */
+function bsparks(t, t0, x, y, o = {}) {
+  const age = t - t0, life = o.life || 0.7;
+  if (age < 0 || age > life * 1.3) return;
+  const col = o.color || [255, 190, 90];
   S.save(); S.globalCompositeOperation = 'lighter'; S.lineCap = 'round';
-  S.strokeStyle = rgba(ch.glow, alpha); S.lineWidth = RIG.lw * s;
-  S.beginPath(); for (const [a, b] of segs) { S.moveTo(a[0], a[1]); S.lineTo(b[0], b[1]); } S.stroke();
-  S.fillStyle = rgba(ch.glow, alpha); S.beginPath(); S.arc(J.head[0], J.head[1], RIG.headR * s, 0, TAU); S.fill();
-  S.restore();
-}
-function eyeTrail(track, ch, t, dur = 0.14, alpha = 1) {
-  const pts = [];
-  for (let i = 0; i <= 12; i++) {
-    const tt = t - dur * i / 12, st = track.at(tt);
-    if ((st.alpha ?? 1) < 0.2) break;
-    const J = solve(st);
-    pts.push(eyePos(J, st.s || 1, vecA(J.hA - 90, 1, J.d), vecA(J.hA, 1, J.d)));
-  }
-  if (pts.length < 3) return;
-  S.save(); S.globalCompositeOperation = 'lighter'; S.lineCap = 'round';
-  for (let i = 0; i < pts.length - 1; i++) {
-    const u = i / (pts.length - 1);
-    S.strokeStyle = rgba(mixc([255, 255, 255], ch.eyeGlow, u), alpha * (1 - u));
-    S.lineWidth = 5 * (1 - u) + 1;
-    S.beginPath(); S.moveTo(pts[i][0], pts[i][1]); S.lineTo(pts[i + 1][0], pts[i + 1][1]); S.stroke();
+  for (let i = 0; i < (o.n || 30); i++) {
+    const r = RNG((o.seed || 5) * 977 + i * 31);
+    const L = life * r.r(0.5, 1.3); if (age > L) continue;
+    const a = ((o.ang ?? -90) + r.s() * (o.spread ?? 160) / 2) * DEG, v = r.r(o.vmin ?? 400, o.vmax ?? 1600);
+    const P = { x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, drag: 2.2, e: 0.45, mu: 0.25, g: 1800 };
+    const p = simPart(P, age), q = simPart(P, Math.max(0, age - 0.025));
+    const u = age / L;
+    S.strokeStyle = rgba(mixc([255, 255, 255], col, u), 1 - u); S.lineWidth = (o.width || 3) * (1 - u * 0.7);
+    S.beginPath(); S.moveTo(q.x, q.y); S.lineTo(p.x, p.y); S.stroke();
+    blob(GL, col, p.x, p.y, 14, (1 - u) * 0.8);
   }
   S.restore();
-  GL.save(); GL.lineCap = 'round'; GL.strokeStyle = rgba(ch.eyeGlow, alpha * 0.8); GL.lineWidth = 16;
-  drawPolyline(GL, pts); GL.restore();
-}
-function actor(track, ch, t, o = {}) {
-  const st = track.at(t);
-  if (!st || (st.alpha ?? 1) <= 0.01) return { st, J: st ? solve(st) : null };
-  if (o.override) Object.assign(st, o.override);
-  const vel = track.vel(t);
-  const ghosts = Math.round(st.ghost || 0);
-  for (let i = ghosts; i >= 1; i--) {
-    const gt = t - i * (o.ghostDt || 0.03);
-    const gs = track.at(gt);
-    if ((gs.alpha ?? 1) > 0.1) ghostFighter(gs, ch, gt, 0.42 * (1 - i / (ghosts + 1)) * (st.alpha ?? 1));
-  }
-  if (ch.aura === 'fire' && (st.aura || 0) > 0.01) fireAura(t, track, st.aura, { seed: o.seed || 41, size: o.fireSize || 1 });
-  if (st.mode === 'rush') st.pose = rushPose(st.pose, t, ch === RAI ? 1 : 2);
-  const J = drawFighter(st, ch, t, { vel, wind: o.wind ?? 0.6, cut: o.cut, outline: o.outline });
-  if (st.mode === 'rush') rushArms(J, ch, t, st.s || 1);
-  if (ch.aura === 'electric' && (st.aura || 0) > 0.01) electricAura(t, J, st.aura, { seed: o.seed || 3 });
-  if (o.eyeTrail && (st.eyes || 0) > 0.2) eyeTrail(track, ch, t, o.eyeTrail, clamp(st.eyes));
-  if ((st.blade || 0) > 0.01) drawBlade(J, st, ch, t);
-  return { st, J, vel };
 }
 
-/* the punch barrage: alternate fists every few frames + phantom arms */
-function rushPose(pose, t, seed) {
-  const f = Math.floor(t * FPS / 3 + seed * 0.5);
-  const r = RNG(f * 13 + seed);
-  const out = { ...pose };
-  if (f % 2) { out.a1 = r.r(78, 104); out.e1 = r.r(-4, 14); out.a2 = r.r(10, 40); out.e2 = 120; }
-  else { out.a2 = r.r(78, 104); out.e2 = r.r(-4, 14); out.a1 = r.r(20, 50); out.e1 = 110; }
-  out.lean = 20 + r.s() * 4;
-  return out;
-}
-function rushArms(J, ch, t, s) {
-  const f = Math.floor(t * FPS);
-  for (let k = 0; k < 6; k++) {
-    const r = RNG(f * 31 + k * 7 + (ch === RAI ? 0 : 999));
-    drawArmOnly(J, r.r(70, 110), r.r(-6, 20), ch, r.r(0.2, 0.5), s);
-  }
+/* ---------- cars as rigid bodies (and sliced halves) ---------- */
+const CAR_VERTS = boxVerts(236, 92, 0, -48);
+function carBody(o) { return bakeBody({ verts: CAR_VERTS, m: 6, e: 0.2, mu: 0.6, dur: 5, ...o }); }
+function drawCarBody(b, t, o = {}) {
+  const st = b.at(t);
+  S.save(); S.translate(st.x, st.y); S.rotate(st.a);
+  if (o.clip) { S.beginPath(); o.clip.forEach((p, i) => (i ? S.lineTo(p[0], p[1]) : S.moveTo(p[0], p[1]))); S.closePath(); S.clip(); }
+  drawCar(S, 1, o);
+  S.restore();
+  if (o.fire) carFire(S, st.x, st.y, 1, t, b.o.x | 0, o.fire);
+  return st;
 }
 
-/* glowing energy katana held in the near hand, along the forearm direction */
-function drawBlade(J, st, ch, t) {
-  const dir = v2.norm(v2.sub(J.h1, J.e1));
-  const L = 250 * (st.s || 1) * clamp(st.blade);
-  const tip = v2.add(J.h1, v2.mul(dir, L));
-  const col = ch === RAI ? [90, 210, 255] : [255, 110, 30];
-  S.save(); S.globalCompositeOperation = 'lighter'; S.lineCap = 'round';
-  S.strokeStyle = rgba(col, 0.6); S.lineWidth = 16 * (st.s || 1);
-  S.beginPath(); S.moveTo(J.h1[0], J.h1[1]); S.lineTo(tip[0], tip[1]); S.stroke();
-  S.strokeStyle = rgba([255, 255, 255], 0.95); S.lineWidth = 5 * (st.s || 1);
-  S.beginPath(); S.moveTo(J.h1[0], J.h1[1]); S.lineTo(tip[0], tip[1]); S.stroke();
-  S.restore();
-  GL.save(); GL.lineCap = 'round'; GL.strokeStyle = rgba(col, 0.9); GL.lineWidth = 40 * (st.s || 1);
-  GL.beginPath(); GL.moveTo(J.h1[0], J.h1[1]); GL.lineTo(tip[0], tip[1]); GL.stroke(); GL.restore();
-  const f = Math.floor(t * 30);
-  if (ch === RAI) {
-    for (let i = 0; i < 2; i++) {
-      const r = RNG(f * 7 + i);
-      const p = v2.lerp(J.h1, tip, r.f());
-      bolt(p, v2.add(p, [r.s() * 60, r.s() * 60]), f * 3 + i, { color: col, width: 1.6, gens: 4 });
-    }
-  } else {
-    flames(t, { rate: 90, life: 0.35, size: 16, rise: 120, seed: 77 }, (ts, r) => v2.lerp(J.h1, tip, r.f()));
-  }
-  return tip;
+/* ---------- name card ---------- */
+function nameCard(t, t0, o) {
+  const a = sat(t0, t0 + 0.06, t);
+  if (a <= 0) return;
+  const s = lerp(1.9, 1, E.outBack(sat(t0, t0 + 0.16, t)));
+  const x = o.x, y = o.y;
+  screenSpace();
+  const bw = E.outExpo(sat(t0 - 0.06, t0 + 0.2, t));
+  S.save(); S.fillStyle = o.band; S.translate(x, y + 30); S.rotate(-0.06);
+  S.beginPath(); const half = 540 * bw;
+  S.moveTo(-half, -150); S.lineTo(half, -170); S.lineTo(half - 30, 150); S.lineTo(-half + 20, 165); S.closePath();
+  S.globalAlpha = 0.86; S.fill(); S.restore();
+  const jit = (1 - sat(t0, t0 + 0.3, t)) * 10;
+  text(S, o.kanji, x + jit * noise1(t * 50, 1), y - 20 + jit * noise1(t * 50, 2), { font: FONT.brush, size: o.size || 330, color: '#ffffff', scale: s, alpha: a, stroke: o.stroke, strokeWidth: 14, shadow: o.shadow, shadowBlur: 50, spacing: o.spacing || 0 });
+  const a2 = sat(t0 + 0.1, t0 + 0.25, t);
+  const slide = (1 - E.outExpo(sat(t0 + 0.1, t0 + 0.45, t))) * 260 * (o.from || 1);
+  text(S, o.name, x + slide, y + 250, { font: FONT.title, size: 130, spacing: 26, color: '#fff', alpha: a2, skew: -0.12, stroke: '#000', strokeWidth: 10 });
+  text(S, o.sub, x - slide * 0.6, y + 345, { font: FONT.sub, size: 44, spacing: 14, color: o.subColor, alpha: a2 });
 }
+
+/* ---------- screen-space impact helpers ---------- */
+function impactLines(cam, p, a = 0.45, r0 = 260) { screenSpace(); const s = camToScreen(cam, p); focusLines(S, s[0], s[1], { alpha: a, r0, n: 120 }); }
 
 /* ambient wind-blown dust streaks near the ground */
 function windDust(t, o = {}) {
@@ -197,45 +205,9 @@ function windDust(t, o = {}) {
     const x = (o.cx || 0) + r.r(-1800, 2400) - age * r.r(500, 1100) * (o.speed || 1);
     const y = -r.r(0, o.h || 260) - age * r.r(-20, 40);
     const len = r.r(20, 90);
-    S.strokeStyle = rgba(o.color || [200, 180, 230], (o.alpha ?? 0.25) * Math.sin(Math.PI * age / 2.2));
+    S.strokeStyle = rgba(o.color || [230, 190, 170], (o.alpha ?? 0.25) * Math.sin(Math.PI * age / 2.2));
     S.lineWidth = r.r(1, 3);
     S.beginPath(); S.moveTo(x, y); S.lineTo(x + len, y + len * 0.04); S.stroke();
   });
   S.restore();
-}
-
-/* full ground backdrop for a camera */
-function groundBG(cam, o = {}) {
-  screenSpace();
-  const pal = o.pal || PAL.night;
-  drawSky(cam, { pal, moon: o.moon, hole: o.hole, clouds: o.clouds, stars: o.stars, cloudAlpha: o.cloudAlpha, dawn: o.dawn });
-  drawLand(cam, { pal });
-  setCam(cam);
-}
-
-/* name card for the character close-ups */
-function nameCard(t, t0, o) {
-  const a = sat(t0, t0 + 0.06, t);
-  if (a <= 0) return;
-  const s = lerp(1.9, 1, E.outBack(sat(t0, t0 + 0.16, t)));
-  const x = o.x, y = o.y;
-  screenSpace();
-  // brush band
-  const bw = E.outExpo(sat(t0 - 0.06, t0 + 0.2, t));
-  S.save();
-  S.fillStyle = o.band;
-  S.translate(x, y + 30); S.rotate(-0.06);
-  S.beginPath();
-  const half = 520 * bw;
-  S.moveTo(-half, -150); S.lineTo(half, -170); S.lineTo(half - 30, 150); S.lineTo(-half + 20, 165); S.closePath();
-  S.globalAlpha = 0.85; S.fill();
-  S.restore();
-  const jit = (1 - sat(t0, t0 + 0.3, t)) * 10;
-  text(S, o.kanji, x + jit * noise1(t * 50, 1), y - 20 + jit * noise1(t * 50, 2), {
-    font: FONT.brush, size: 420, color: '#ffffff', scale: s, alpha: a, stroke: o.stroke, strokeWidth: 14, shadow: o.shadow, shadowBlur: 50,
-  });
-  const a2 = sat(t0 + 0.1, t0 + 0.25, t);
-  const slide = (1 - E.outExpo(sat(t0 + 0.1, t0 + 0.45, t))) * 260 * (o.from || 1);
-  text(S, o.name, x + slide, y + 250, { font: FONT.title, size: 130, spacing: 26, color: '#fff', alpha: a2, skew: -0.12, stroke: '#000', strokeWidth: 10 });
-  text(S, o.sub, x - slide * 0.6, y + 345, { font: FONT.sub, size: 44, spacing: 14, color: o.subColor, alpha: a2 });
 }
